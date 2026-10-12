@@ -19,8 +19,10 @@
 <section class="layout"><div class="panel"><div class="panel-head"><span>◉ PROVIDER STATUS</span><span id="providerSummary">FETCHING...</span></div><div class="service-grid" id="serviceGrid"></div></div><div class="panel"><div class="panel-head"><span>▥ INCIDENT SIGNALS</span><span>SESSION COUNTS</span></div><div class="activity"><div class="small">このページを開いてから取得した、各フィードのアクティブなインシデント件数。</div><div class="bars" id="bars" aria-label="セッション内の障害件数グラフ"></div><div class="bar-labels"><span>EARLIER</span><span>NOW</span></div><p class="small">※ 過去24時間の履歴ではなく、ページを開いてからの取得記録です。</p></div><div class="mapbox"><div><strong id="signalCount">0</strong>ACTIVE INCIDENT SIGNALS<br><span class="small">公式フィードに位置情報がないため、地図上の場所を推測していません。</span></div></div></div></section>
 <div class="section"><div><h3>02 / LIVE INCIDENT FEED</h3><p>実際に公式フィードから返された未解決インシデント</p></div><span class="tag">VERIFIED SOURCE LINKS</span></div>
 <div class="tools"><input id="search" class="control search" placeholder="⌕ サービス名・障害内容を検索..." aria-label="障害検索"><select id="severityFilter" class="control" aria-label="重大度"><option value="all">ALL SEVERITIES</option><option value="major">MAJOR</option><option value="partial">PARTIAL / MINOR</option></select><select id="providerFilter" class="control" aria-label="プロバイダー"><option value="all">ALL PROVIDERS</option></select><button id="refresh" class="control">↻ REFRESH NOW</button></div>
-<div class="incidents" id="incidentList"><div class="empty">公式ステータス情報を取得中...</div></div>
-<div class="section"><div><h3>03 / OFFICIAL SOURCE NODES</h3><p>データの出典を確認できる公式ページ・API</p></div><span class="tag">PRIMARY SOURCES</span></div>
+<div class="incidents" id="incidentList"><div class="empty">公式ステータス情報を取得中...</div></div><div class="section"><div><h3>03 / HISTORICAL INCIDENT ARCHIVE</h3><p>ページを開く前に発生した障害も、公式アーカイブから取得して表示。解決済みの記録も含みます。</p></div><span class="tag">PAST EVENTS</span></div>
+<div class="tools"><input id="historySearch" class="control search" placeholder="⌕ 過去の障害を検索..." aria-label="過去の障害を検索"><select id="historyProviderFilter" class="control" aria-label="履歴プロバイダー"><option value="all">ALL PROVIDERS</option></select><select id="historyPeriod" class="control" aria-label="履歴期間"><option value="all">ALL AVAILABLE HISTORY</option><option value="7">LAST 7 DAYS</option><option value="30">LAST 30 DAYS</option><option value="90">LAST 90 DAYS</option></select><button id="historyRefresh" class="control">↻ LOAD HISTORY</button></div>
+<div class="panel"><div class="panel-head"><span>◷ RESOLVED + ACTIVE INCIDENTS</span><span id="historyStatus">CONNECTING TO ARCHIVES…</span></div><div class="incidents" id="historyList" style="padding:12px"><div class="empty">公式アーカイブを取得中...</div></div></div>
+<div class="section"><div><h3>04 / OFFICIAL SOURCE NODES</h3><p>データの出典を確認できる公式ページ・API</p></div><span class="tag">PRIMARY SOURCES</span></div>
 <section class="sources-list" id="sourcesList"></section>
 <footer><div><strong style="color:#a9c4d5;letter-spacing:.12em">INCIDENT RADAR // GLOBAL WATCH</strong><br>Independent project · Not affiliated with listed providers.</div><div>UPDATE INTERVAL: 60s · TIMEZONE: UTC<br><span id="lastRefresh">NO DATA YET</span></div></footer>
 </main>
@@ -67,6 +69,49 @@ async function fetchProvider(p){
  catch(e){return {provider:p.name,url:p.url,api:p.api,ok:false,indicator:"unknown",description:e.name==="AbortError"?"Request timed out":(e.message||"Fetch failed")+" (CORS/network/API)",components:[],incidents:[],updated:new Date().toISOString(),error:true}}
  finally{clearTimeout(timer)}
 }
+
+const historySources=providers.filter(p=>p.kind==="statuspage"||p.kind==="google").map(p=>({...p,historyApi:p.kind==="google"?p.api:"https://"+new URL(p.url).hostname+"/api/v2/incidents.json"}));
+let historicalIncidents=[],historyBusy=false;
+async function fetchHistorySource(p){
+ try{
+  const r=await fetch(p.historyApi,{cache:"no-store",headers:{"Accept":"application/json"}});
+  if(!r.ok)throw new Error("HTTP "+r.status);
+  const j=await r.json();
+  const raw=p.kind==="google"?(Array.isArray(j)?j:[]):(Array.isArray(j.incidents)?j.incidents:[]);
+  return raw.map((i,n)=>{
+   const created=i.created_at||i.begin||i.started_at||i.updated_at||"";
+   const resolved=i.resolved_at||i.end||i.ended_at||"";
+   const status=i.status||i.most_recent_update?.status||i.status_impact||"unknown";
+   const title=i.name||i.external_desc||i.service_name||"Untitled incident";
+   const body=(i.incident_updates||[])[0]?.body||i.most_recent_update?.text||i.summary||i.external_desc||"公式アーカイブに記録されたインシデント。詳細は公式記録を参照してください。";
+   return {provider:p.name,id:i.id||String(n),title,status,impact:i.impact||i.severity||i.status_impact||"unknown",body,created,resolved,url:i.shortlink||p.url,active:!resolved&&!["resolved","postmortem","completed","closed"].includes(String(status).toLowerCase())};
+  });
+ }catch(e){console.warn("Historical archive unavailable:",p.name,e.message);return null}
+}
+function renderHistory(){
+ const q=$("#historySearch").value.trim().toLowerCase(),provider=$("#historyProviderFilter").value,period=$("#historyPeriod").value;
+ const cutoff=period==="all"?0:Date.now()-Number(period)*86400000;
+ const shown=historicalIncidents.filter(i=>(provider==="all"||i.provider===provider)&&(!i.created||!cutoff||new Date(i.created).getTime()>=cutoff)&&((i.provider+" "+i.title+" "+i.body+" "+i.status).toLowerCase().includes(q)));
+ $("#historyStatus").textContent=shown.length+" EVENTS / "+new Set(historicalIncidents.map(i=>i.provider)).size+" SOURCES";
+ $("#historyList").innerHTML=shown.length?shown.map(i=>{
+  const major=/major|critical|outage/i.test(i.impact+" "+i.status),minor=/minor|degraded|partial/i.test(i.impact+" "+i.status);
+  const statusLabel=i.active?"ACTIVE / ONGOING":i.resolved?"RESOLVED / HISTORICAL":String(i.status).toUpperCase()+" / HISTORICAL";
+  return '<article class="incident"><div class="severity '+(major?"major":minor?"":"minor")+'"></div><div><h4>'+escapeHTML(i.title)+'</h4><p>'+escapeHTML(i.body)+'</p><div class="meta"><span class="chip '+(i.active?"red":"")+'">'+escapeHTML(statusLabel)+'</span><span class="chip">'+escapeHTML(i.provider)+'</span><span class="chip">'+escapeHTML(i.impact)+'</span></div></div><div class="incident-side"><a href="'+escapeHTML(i.url)+'" target="_blank" rel="noopener">OFFICIAL ↗</a>START: '+escapeHTML(timeLabel(i.created))+'<br>END: '+escapeHTML(timeLabel(i.resolved))+'</div></article>';
+ }).join(""):'<div class="empty">条件に一致する履歴がありません。APIが公開する履歴件数・期間には上限があります。</div>';
+}
+async function loadHistoricalIncidents(){
+ if(historyBusy)return;historyBusy=true;$("#historyStatus").textContent="FETCHING OFFICIAL ARCHIVES…";
+ const results=await Promise.all(historySources.map(fetchHistorySource));
+ const succeeded=results.filter(x=>x!==null);
+ historicalIncidents=succeeded.flat().sort((a,b)=>new Date(b.created||0)-new Date(a.created||0));
+ $("#historyProviderFilter").innerHTML='<option value="all">ALL PROVIDERS</option>'+[...new Set(historicalIncidents.map(i=>i.provider))].sort().map(n=>'<option value="'+escapeHTML(n)+'">'+escapeHTML(n)+'</option>').join("");
+ if(!succeeded.length){
+  $("#historyStatus").textContent="ARCHIVES UNAVAILABLE";
+  $("#historyList").innerHTML='<div class="empty">ブラウザーから公式履歴APIに接続できませんでした。CORS制限がある場合はサーバー側の中継が必要です。公式ステータスページのリンクから履歴を確認できます。</div>';
+ }else renderHistory();
+ historyBusy=false;
+}
+
 function render(){
  const active=states.flatMap(p=>p.incidents.filter(i=>i.active));const degraded=states.filter(p=>p.ok&&statusClass(p.indicator)==="warn").length;
  $("#sourceCount").textContent=String(providers.length).padStart(2,"0");$("#activeCount").textContent=active.length;$("#degradedCount").textContent=degraded;
@@ -88,8 +133,9 @@ async function refresh(){
  const currentProv=$("#providerFilter").value;$("#providerFilter").innerHTML='<option value="all">ALL PROVIDERS</option>'+providers.map(p=>'<option value="'+escapeHTML(p.name)+'">'+escapeHTML(p.name)+'</option>').join("");if(providers.some(p=>p.name===currentProv))$("#providerFilter").value=currentProv;
  busy=false;render();
 }
+$("#historySearch").addEventListener("input",renderHistory);$("#historyProviderFilter").addEventListener("change",renderHistory);$("#historyPeriod").addEventListener("change",renderHistory);$("#historyRefresh").addEventListener("click",loadHistoricalIncidents);
 $("#search").addEventListener("input",render);$("#severityFilter").addEventListener("change",render);$("#providerFilter").addEventListener("change",render);$("#refresh").addEventListener("click",refresh);
 $("#sourcesList").innerHTML=providers.map(p=>'<div class="source-link"><strong>'+escapeHTML(p.name)+'</strong><div class="small">'+escapeHTML(p.kind==="linkonly"?"Official page · no public API confirmed":"Official status data")+'</div><a href="'+escapeHTML(p.url)+'" target="_blank" rel="noopener">STATUS PAGE ↗</a>'+(p.api?'<br><a href="'+escapeHTML(p.api)+'" target="_blank" rel="noopener">JSON API ↗</a>':"")+'</div>').join("");
 $("#clock").textContent="--:--:-- UTC";setInterval(()=>$("#clock").textContent=new Date().toISOString().slice(11,19)+" UTC",1000);
-refresh();setInterval(refresh,REFRESH_MS);
+refresh();loadHistoricalIncidents();setInterval(refresh,REFRESH_MS);
 </script></body></html>
