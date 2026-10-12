@@ -65,9 +65,22 @@ function timeLabel(s){if(!s)return"Time not provided";const d=new Date(s);return
 async function fetchProvider(p){
  if(p.kind==="linkonly")return {provider:p.name,url:p.url,ok:false,noApi:true,indicator:"unknown",description:p.note,components:[],incidents:[],updated:new Date().toISOString(),error:false};
  const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),12000);
- try{const r=await fetch(p.api,{cache:"no-store",signal:ctrl.signal,headers:{"Accept":"application/json"}});if(!r.ok)throw new Error("HTTP "+r.status);const j=await r.json();return p.kind==="google"?normalizeGoogle(p,j):p.kind==="apple"?normalizeApple(p,j):normalizeStatuspage(p,j)}
- catch(e){return {provider:p.name,url:p.url,api:p.api,ok:false,indicator:"unknown",description:e.name==="AbortError"?"Request timed out":(e.message||"Fetch failed")+" (CORS/network/API)",components:[],incidents:[],updated:new Date().toISOString(),error:true}}
- finally{clearTimeout(timer)}
+ try{
+  const r=await fetch(p.api,{cache:"no-store",signal:ctrl.signal,headers:{"Accept":p.kind==="apple"?"application/javascript, text/javascript, application/json":"application/json"}});
+  if(!r.ok)throw new Error("HTTP "+r.status);
+  let j;
+  if(p.kind==="apple"){
+   const raw=await r.text();
+   // Apple publishes this feed as JavaScript, not strict JSON.
+   const start=raw.indexOf("{"),end=raw.lastIndexOf("}");
+   if(start<0||end<=start)throw new Error("Apple feed format changed");
+   j=JSON.parse(raw.slice(start,end+1));
+  }else j=await r.json();
+  return p.kind==="google"?normalizeGoogle(p,j):p.kind==="apple"?normalizeApple(p,j):normalizeStatuspage(p,j);
+ }catch(e){
+  const detail=e.name==="AbortError"?"応答タイムアウト":e instanceof SyntaxError?"公式データの形式を読み取れません":(e.message||"取得失敗");
+  return {provider:p.name,url:p.url,api:p.api,ok:false,indicator:"unknown",description:detail+"。接続制限(CORS)の可能性もあります。公式ページで確認してください。",components:[],incidents:[],updated:new Date().toISOString(),error:true};
+ }finally{clearTimeout(timer)}
 }
 
 const historySources=providers.filter(p=>p.kind==="statuspage"||p.kind==="google").map(p=>({...p,historyApi:p.kind==="google"?p.api:"https://"+new URL(p.url).hostname+"/api/v2/incidents.json"}));
