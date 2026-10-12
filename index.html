@@ -13,8 +13,8 @@
 <body><main class="shell">
 <header class="top"><div class="brand"><div class="logo"><span>⌁</span></div><div><h1>INCIDENT RADAR</h1><div class="sub">GLOBAL SYSTEM OBSERVABILITY / LIVE</div></div></div><div class="pill"><i class="pulse"></i><span id="connection">INITIALIZING FEEDS</span></div></header>
 <section class="hero"><div><div class="eyebrow">// WORLDWIDE INFRASTRUCTURE INTELLIGENCE</div><h2>THE INTERNET IS<br><em>NOT ALWAYS OK.</em></h2><p class="intro">クラウド、AI、開発者サービスの公式ステータス情報を自動取得。障害・サービス低下・復旧情報をリアルタイムに近い形で可視化します。</p></div><div class="time"><strong id="clock">--:--:-- UTC</strong><div id="updated">WAITING FOR FIRST UPDATE</div></div></section>
-<div class="notice">DATA SOURCE: 各サービスの公式ステータスAPI。60秒ごとに自動更新します。取得できないサービスは「取得失敗」と表示し、障害がないと推測して表示することはありません。公式ステータスの反映遅延やAPI/CORS制限により、すべての障害を検知できるとは限りません。</div>
-<section class="stats"><div class="stat"><label>OFFICIAL SOURCES</label><strong id="sourceCount">06</strong></div><div class="stat"><label>ACTIVE INCIDENTS</label><strong class="red" id="activeCount">—</strong></div><div class="stat"><label>DEGRADED SERVICES</label><strong class="amber" id="degradedCount">—</strong></div><div class="stat"><label>FEED HEALTH</label><strong class="green" id="feedHealth" style="font-size:22px">CONNECTING</strong></div></section>
+<div class="notice">DATA SOURCE: 公式ステータスAPI・公式ステータスページ。API対応サービスは60秒ごとに自動更新します。公開APIを確認できないMicrosoftとGoogle Workspaceは公式ページへのリンクとして掲載し、稼働状態を推測しません。API/CORS制限や公式情報の反映遅延により、すべての障害を検知できるとは限りません。</div>
+<section class="stats"><div class="stat"><label>OFFICIAL SOURCES</label><strong id="sourceCount">10</strong></div><div class="stat"><label>ACTIVE INCIDENTS</label><strong class="red" id="activeCount">—</strong></div><div class="stat"><label>DEGRADED SERVICES</label><strong class="amber" id="degradedCount">—</strong></div><div class="stat"><label>FEED HEALTH</label><strong class="green" id="feedHealth" style="font-size:22px">CONNECTING</strong></div></section>
 <div class="section"><div><h3>01 / PROVIDER TELEMETRY</h3><p>サービスごとの公式ステータスAPIから取得した最新状態</p></div><span class="tag">LIVE API FEEDS</span></div>
 <section class="layout"><div class="panel"><div class="panel-head"><span>◉ PROVIDER STATUS</span><span id="providerSummary">FETCHING...</span></div><div class="service-grid" id="serviceGrid"></div></div><div class="panel"><div class="panel-head"><span>▥ INCIDENT SIGNALS</span><span>SESSION COUNTS</span></div><div class="activity"><div class="small">このページを開いてから取得した、各フィードのアクティブなインシデント件数。</div><div class="bars" id="bars" aria-label="セッション内の障害件数グラフ"></div><div class="bar-labels"><span>EARLIER</span><span>NOW</span></div><p class="small">※ 過去24時間の履歴ではなく、ページを開いてからの取得記録です。</p></div><div class="mapbox"><div><strong id="signalCount">0</strong>ACTIVE INCIDENT SIGNALS<br><span class="small">公式フィードに位置情報がないため、地図上の場所を推測していません。</span></div></div></div></section>
 <div class="section"><div><h3>02 / LIVE INCIDENT FEED</h3><p>実際に公式フィードから返された未解決インシデント</p></div><span class="tag">VERIFIED SOURCE LINKS</span></div>
@@ -32,7 +32,11 @@ const providers=[
  {name:"GitHub",url:"https://www.githubstatus.com/",api:"https://www.githubstatus.com/api/v2/summary.json",kind:"statuspage"},
  {name:"Atlassian",url:"https://status.atlassian.com/",api:"https://status.atlassian.com/api/v2/summary.json",kind:"statuspage"},
  {name:"Discord",url:"https://discordstatus.com/",api:"https://discordstatus.com/api/v2/summary.json",kind:"statuspage"},
- {name:"Google Cloud",url:"https://status.cloud.google.com/",api:"https://status.cloud.google.com/incidents.json",kind:"google"}
+ {name:"Google Cloud",url:"https://status.cloud.google.com/",api:"https://status.cloud.google.com/incidents.json",kind:"google"},
+ {name:"Claude",url:"https://status.claude.com/",api:"https://status.claude.com/api/v2/summary.json",kind:"statuspage"},
+ {name:"Apple",url:"https://www.apple.com/support/systemstatus/",api:"https://www.apple.com/support/systemstatus/data/system_status_en_US.js",kind:"apple"},
+ {name:"Microsoft",url:"https://status.cloud.microsoft/",kind:"linkonly",note:"公式ステータスページ。詳細なMicrosoft 365の組織向け状態は認証が必要な場合があります。"},
+ {name:"Google Workspace",url:"https://www.google.com/appsstatus/dashboard/",kind:"linkonly",note:"公式ステータスダッシュボード。確認できる公開JSON APIがないため、ここでは状態を推測しません。"}
 ];
 let states=[],history=[],busy=false;
 const $=s=>document.querySelector(s);
@@ -47,12 +51,19 @@ function normalizeGoogle(p,j){
  const arr=Array.isArray(j)?j:[];const incidents=arr.filter(i=>!i.end||new Date(i.end).getTime()>Date.now()).map((i,n)=>({provider:p.name,id:i.id||String(n),title:i.external_desc||i.service_name||"Google Cloud incident",status:i.most_recent_update?.status||i.status_impact||"investigating",impact:(i.severity||i.status_impact||"minor").toLowerCase(),body:i.most_recent_update?.text||i.external_desc||"Google Cloud公式インシデント情報",created:i.begin||"",url:p.url,components:[i.service_name].filter(Boolean),source:p.url,active:true}));
  return {provider:p.name,url:p.url,api:p.api,ok:true,indicator:incidents.length?"minor":"none",description:incidents.length?"Active incidents reported":"No active incidents reported by this feed",components:[],incidents,updated:new Date().toISOString(),kind:"google"};
 }
+function normalizeApple(p,j){
+ const services=Array.isArray(j.services)?j.services:[];
+ const components=services.map(s=>({name:s.serviceName||s.name||"Apple service",status:s.statusMessage||s.statusType||s.status||"status not specified"}));
+ const incidents=services.filter(s=>/outage|degrad|issue|unavailable|maintenance|problem|障害|停止|遅延/i.test([s.statusMessage,s.statusType,s.status].filter(Boolean).join(" "))).map((s,n)=>({provider:p.name,id:String(n),title:s.serviceName||"Apple service status",status:s.statusType||s.statusMessage||"investigating",impact:"minor",body:s.statusMessage||"Apple公式システム状況で問題が報告されています。",created:s.updated||s.lastUpdated||"",url:p.url,components:[s.serviceName].filter(Boolean),source:p.url,active:true}));
+ return {provider:p.name,url:p.url,api:p.api,ok:true,indicator:incidents.length?"minor":"none",description:incidents.length?"Service status needs attention":"Apple status feed loaded",components,incidents,updated:new Date().toISOString(),kind:"apple"};
+}
 function statusClass(s){s=(s||"").toLowerCase();if(["major_outage","critical","major","incident","outage"].some(x=>s.includes(x)))return"bad";if(["partial_outage","degraded_performance","minor","maintenance"].some(x=>s.includes(x)))return"warn";if(["unknown","error"].some(x=>s.includes(x)))return"unknown";return""}
-function statusLabel(p){if(!p.ok)return"FETCH FAILED";if(p.incidents.some(i=>i.active))return"INCIDENT ACTIVE";const i=(p.indicator||"").toLowerCase();if(i==="none"||i==="operational"||i==="green")return"OPERATIONAL";if(i==="minor")return"MINOR IMPACT";if(i==="major")return"MAJOR IMPACT";if(i==="critical")return"CRITICAL";return p.description||"STATUS AVAILABLE"}
+function statusLabel(p){if(p.noApi)return"OFFICIAL PAGE ONLY";if(!p.ok)return"FETCH FAILED";if(p.incidents.some(i=>i.active))return"INCIDENT ACTIVE";const i=(p.indicator||"").toLowerCase();if(i==="none"||i==="operational"||i==="green")return"OPERATIONAL";if(i==="minor")return"MINOR IMPACT";if(i==="major")return"MAJOR IMPACT";if(i==="critical")return"CRITICAL";return p.description||"STATUS AVAILABLE"}
 function timeLabel(s){if(!s)return"Time not provided";const d=new Date(s);return isNaN(d)?s:d.toISOString().replace("T"," ").slice(0,16)+" UTC"}
 async function fetchProvider(p){
+ if(p.kind==="linkonly")return {provider:p.name,url:p.url,ok:false,noApi:true,indicator:"unknown",description:p.note,components:[],incidents:[],updated:new Date().toISOString(),error:false};
  const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),12000);
- try{const r=await fetch(p.api,{cache:"no-store",signal:ctrl.signal,headers:{"Accept":"application/json"}});if(!r.ok)throw new Error("HTTP "+r.status);const j=await r.json();return p.kind==="google"?normalizeGoogle(p,j):normalizeStatuspage(p,j)}
+ try{const r=await fetch(p.api,{cache:"no-store",signal:ctrl.signal,headers:{"Accept":"application/json"}});if(!r.ok)throw new Error("HTTP "+r.status);const j=await r.json();return p.kind==="google"?normalizeGoogle(p,j):p.kind==="apple"?normalizeApple(p,j):normalizeStatuspage(p,j)}
  catch(e){return {provider:p.name,url:p.url,api:p.api,ok:false,indicator:"unknown",description:e.name==="AbortError"?"Request timed out":(e.message||"Fetch failed")+" (CORS/network/API)",components:[],incidents:[],updated:new Date().toISOString(),error:true}}
  finally{clearTimeout(timer)}
 }
@@ -78,7 +89,7 @@ async function refresh(){
  busy=false;render();
 }
 $("#search").addEventListener("input",render);$("#severityFilter").addEventListener("change",render);$("#providerFilter").addEventListener("change",render);$("#refresh").addEventListener("click",refresh);
-$("#sourcesList").innerHTML=providers.map(p=>'<div class="source-link"><strong>'+escapeHTML(p.name)+'</strong><div class="small">Official status data</div><a href="'+escapeHTML(p.url)+'" target="_blank" rel="noopener">STATUS PAGE ↗</a><br><a href="'+escapeHTML(p.api)+'" target="_blank" rel="noopener">JSON API ↗</a></div>').join("");
+$("#sourcesList").innerHTML=providers.map(p=>'<div class="source-link"><strong>'+escapeHTML(p.name)+'</strong><div class="small">'+escapeHTML(p.kind==="linkonly"?"Official page · no public API confirmed":"Official status data")+'</div><a href="'+escapeHTML(p.url)+'" target="_blank" rel="noopener">STATUS PAGE ↗</a>'+(p.api?'<br><a href="'+escapeHTML(p.api)+'" target="_blank" rel="noopener">JSON API ↗</a>':"")+'</div>').join("");
 $("#clock").textContent="--:--:-- UTC";setInterval(()=>$("#clock").textContent=new Date().toISOString().slice(11,19)+" UTC",1000);
 refresh();setInterval(refresh,REFRESH_MS);
 </script></body></html>
